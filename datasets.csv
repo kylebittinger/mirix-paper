@@ -1,0 +1,6 @@
+Index,Host,Antibiotic,Description,Dataset,Paper,doi,Accession
+Vancomycin,Human,Vancomycin,Placebo; Vancomycin,Shotgun,Basolo et al. (Nat Med 2020),10.1038/s41591-020-0801-z,PRJNA589622
+Anaerobic,Human,Metronidazole,"Week 0, [4, 8], 12",V4,Sprockett et al. (Inflamm Bowel Dis 2019),10.1093/ibd/izz130,PRJNA489897
+Aerobic,Human,Ciprofloxacin,"Day 0, [1, 3, 7]",Shotgun,Willmann et al (BMC Biology 2019),10.1186/s12915-019-0692-y,PRJEB28058
+Tetracycline,Mouse,Doxycycline,"Control:Doxycycline - Day 0, [7, 14], 21, [28]",V4,Boynton et al. (BMC Res Notes 2017),10.1186/s13104-017-2960-7,
+Beta-lactams,Mouse,Amoxicillin,"Control; Amoxicillin",Shotgun,Cabral et al. (Cell Metabolism 2019),10.1016/j.cmet.2019.08.020,PRJNA504846
