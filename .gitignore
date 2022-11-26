@@ -5,3 +5,5 @@
 
 figures/*.pdf
 figures/*.png
+
+.DS_Store
