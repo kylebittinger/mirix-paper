@@ -1,0 +1,307 @@
+---
+title: "HMP data prep"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(tidyverse)
+```
+
+
+# Functions
+
+```{r}
+simplify_assignments <- function(assignments_df, rank1="Phylum", 
+  rank2="Genus") {
+  if (is.character(rank1)) {
+    rank1 <- match(rank1, colnames(assignments_df))
+  }
+  if (is.character(rank2)) {
+    rank2 <- match(rank2, colnames(assignments_df))
+  }
+  apply(assignments_df, 1, function (x) {
+    x <- na.omit(as.character(x))
+    n <- length(x)
+    if (n == 1)     return(x)
+    if (n < rank1)  return(paste(x, collapse=" "))
+    if (n == rank1) return(x[rank1])
+    if (n < rank2)  return(paste(x[rank1], "-", x[length(x)]))
+    return(paste(x[rank1], "-", x[rank2]))
+  })
+}
+```
+
+```{r}
+save_figure <- function (fbase, width, height, p = last_plot()) {
+  ggsave(
+    paste0(fbase, ".pdf"), plot = p, width = width, height = height,
+    useDingbats = FALSE)
+  ggsave(
+    paste0(fbase, ".png"), plot = p, width = width, height = height,
+    dpi = 300)
+}
+```
+
+# Color palettes and levels
+
+```{r}
+hmp_body_subsites <- c("Stool", "Saliva", "Right Antecubital Fossa")
+```
+
+```{r}
+body_site_colors <- c(
+  Gut = "#DF8F44FF",
+  Oral = "#00A1D5FF",
+  Skin = "#B24745FF")
+```
+
+```{r}
+resistant_colors <- c(resistant = "#ff8585", susceptible = "#999999")
+```
+
+```{r}
+antibiotic_levels <- c(
+  "Vancomycin", "Metronidazole", "Ciprofloxacin",
+  "Amoxicillin", "Doxycycline")
+```
+
+
+# Data import
+
+```{r}
+#using V35 as all samples from al body sites were sequenced with this technology
+#had to downgrade dplyr and dbplyr first before able to download HMP16SData/also had to downgrade to work with curatedMetagenomicData
+#require(devtools)
+#install_version("dplyr", version = "0.8.0", repos = "http://cran.us.r-project.org")
+#install_version("dbplyr", version = "1.3.0", repos = "http://cran.us.r-project.org")
+#BiocManager::install("HMP16SData", version = "3.10", dependencies = TRUE)
+
+#HMP16SData requires older version of dplyr and dbplyr, which was installed to get these packages installed
+#reverted back to newer versions of these packages for analysis
+#library(HMP16SData)
+# V35_data <- V35()
+# save(V35_data, file = here("Data", "HMP_V35.RData"))
+#just saved V35 data as RData so dont have to use their package
+```
+
+```{r}
+library(SummarizedExperiment)
+load("paperdata/hmp/HMP_V35.RData")
+hmp_data <- V35_data
+rm(V35_data)
+```
+
+```{r}
+s_hmp <- tibble(
+  sample_id = colnames(hmp_data),
+  visit_num = hmp_data$VISITNO,
+  sex = hmp_data$SEX,
+  run_center = hmp_data$RUN_CENTER,
+  body_site = hmp_data$HMP_BODY_SITE,
+  body_subsite = hmp_data$HMP_BODY_SUBSITE) %>%
+  filter(visit_num %in% 1) %>%
+  filter(body_subsite %in% hmp_body_subsites) %>%
+  mutate(body_site = str_replace(body_site, "Gastrointestinal Tract", "Gut"))
+```
+
+```{r}
+taxa_hmp <- hmp_data %>%
+  SummarizedExperiment::rowData() %>%
+  as.data.frame() %>%
+  rownames_to_column("taxon_id") %>%
+  dplyr::rename(
+    lineage = CONSENSUS_LINEAGE, Kingdom = SUPERKINGDOM, Phylum = PHYLUM,
+    Class = CLASS, Order = ORDER, Family = FAMILY, Genus = GENUS) %>%
+  filter(!(Class %in% "Chloroplast")) %>%
+  mutate(lineage = str_replace(lineage, "Root;", "k__Bacteria;")) %>%
+  mutate(assignment = simplify_assignments(dplyr::select(., Kingdom:Genus)))
+```
+
+```{r}
+cts_hmp <- SummarizedExperiment::assays(hmp_data)$`16SrRNA` %>%
+  as.data.frame() %>%
+  tibble::rownames_to_column("taxon_id") %>%
+  as_tibble() %>%
+  dplyr::filter(taxon_id %in% taxa_hmp$taxon_id) %>%
+  dplyr::select(taxon_id, all_of(s_hmp$sample_id)) %>%
+  pivot_longer(cols = -taxon_id, names_to = "sample_id", values_to = "num_reads")
+```
+
+```{r}
+rm(hmp_data)
+```
+
+```{r}
+antibiotic_classes <- tibble(
+  antibiotic = c(
+  "Vancomycin", "Metronidazole", "Ciprofloxacin",
+  "Amoxicillin", "Doxycycline"),
+  antibiotic_class = rep(c("Narrow spectrum", "Broad spectrum"), times = c(3,2)))
+```
+
+# Susceptibility
+
+```{r}
+library(abxidx)
+```
+
+```{r}
+metronidazole_susceptibility <- function (lineage) {
+  phenotype_susceptibility(
+    lineage = lineage, 
+    phenotype = "aerobic_status",
+    susceptibility = c(
+      aerobe = "resistant", 
+      `facultative anaerobe` = "resistant",
+      `obligate anaerobe` = "susceptible"), 
+    db = taxon_phenotypes)
+}
+ciprofloxacin_susceptibility <- function (lineage) {
+  phenotype_susceptibility(
+    lineage = lineage, 
+    phenotype = "aerobic_status",
+    susceptibility = c(
+      aerobe = "susceptible", 
+      `facultative anaerobe` = "susceptible",
+      `obligate anaerobe` = "resistant"), 
+    db = taxon_phenotypes)
+}
+susceptibility_fcns <- c(
+  vancomycin = vancomycin_susceptibility,
+  metronidazole = metronidazole_susceptibility,
+  ciprofloxacin = ciprofloxacin_susceptibility,
+  amoxicillin = penicillin_susceptibility,
+  doxycycline = tetracycline_susceptibility)
+suscept_hmp <- taxa_hmp %>%
+  mutate(across(lineage, susceptibility_fcns)) %>%
+  select(taxon_id, starts_with("lineage_"))
+```
+
+# MiRIx values
+
+```{r}
+idxdf_hmp <- cts_hmp %>%
+  filter(num_reads > 0) %>%
+  left_join(suscept_hmp, by = "taxon_id") %>%
+  group_by(sample_id) %>%
+  mutate(prop = num_reads / sum(num_reads)) %>%
+  summarise(across(starts_with("lineage_"), list(
+    mirix = ~ - antibiotic_index(prop, .x)))) %>%
+  rename_with(str_remove, .cols = everything(), "^lineage_")
+```
+
+```{r}
+idxdf_hmp %>%
+  pivot_longer(-sample_id, names_to = "antibiotic", values_to = "value") %>%
+  mutate(antibiotic = str_to_title(str_remove(antibiotic, "_mirix"))) %>%
+  mutate(antibiotic = factor(antibiotic, levels = antibiotic_levels)) %>%
+  left_join(s_hmp, by = "sample_id") %>%
+  ggplot(aes(x = body_site, y = value, color = body_site)) +
+  ggbeeswarm::geom_quasirandom() +
+  facet_grid(~ antibiotic) +
+  scale_color_manual(values = body_site_colors) +
+  labs(y = "MiRIx value", x = "", color = "Body site") +
+  theme_bw() +
+  theme(
+    axis.text.x = element_blank(),
+    strip.background = element_blank(),
+    legend.position = "bottom")
+save_figure("figures/mirix_fig5a", width = 6, height = 3.5)
+```
+
+```{r}
+idxdf_hmp %>%
+  pivot_longer(-sample_id, names_to = "antibiotic", values_to = "value") %>%
+  mutate(antibiotic = str_to_title(str_remove(antibiotic, "_mirix"))) %>%
+  mutate(antibiotic = factor(antibiotic, levels = antibiotic_levels)) %>%
+  left_join(s_hmp, by = "sample_id") %>%
+  mutate(no_resistant = value > 3.99999) %>%
+  group_by(antibiotic, body_site) %>%
+  summarise(prop_no_resistant = mean(no_resistant), .groups = "drop")
+```
+
+```{r}
+idxdf_hmp %>%
+  pivot_longer(-sample_id, names_to = "antibiotic", values_to = "value") %>%
+  mutate(antibiotic = str_to_title(str_remove(antibiotic, "_mirix"))) %>%
+  mutate(antibiotic = factor(antibiotic, levels = antibiotic_levels)) %>%
+  left_join(s_hmp, by = "sample_id") %>%
+  group_by(antibiotic, body_site) %>%
+  summarise(
+    mirix_lo = quantile(value, 0.25), mirix_hi = quantile(value, 0.75),
+    .groups = "drop")
+```
+
+
+```{r}
+suscept_assignments_hmp <- taxa_hmp %>%
+  left_join(suscept_hmp, by = "taxon_id") %>%
+  group_by(assignment) %>%
+  summarise(across(starts_with("lineage_"), ~ .x[1]))
+```
+
+```{r}
+props_hmp <- cts_hmp %>%
+  left_join(taxa_hmp, by = "taxon_id") %>%
+  group_by(assignment, sample_id) %>%
+  summarise(num_reads = sum(num_reads), .groups = "drop") %>%
+  group_by(sample_id) %>%
+  mutate(prop = num_reads / sum(num_reads)) %>%
+  ungroup()
+```
+
+```{r}
+top_taxa_hmp <- props_hmp %>%
+  left_join(s_hmp, by = "sample_id") %>%
+  group_by(body_site, assignment) %>%
+  summarise(med_prop = mean(prop), .groups = "drop") %>%
+  group_by(body_site) %>%
+  slice_max(med_prop, n = 5) %>%
+  ungroup()
+```
+
+```{r}
+props_hmp %>%
+  left_join(s_hmp, by = "sample_id") %>%
+  right_join(top_taxa_hmp, by = c("body_site", "assignment")) %>%
+  left_join(suscept_assignments_hmp, by = "assignment") %>%
+  ggplot(aes(y = fct_rev(assignment), fill = body_site)) +
+  geom_boxplot(aes(x = prop + 1e-5), outlier.shape = NA) +
+  facet_wrap(~ body_site, ncol = 1, scales = "free_y") +
+  scale_x_log10(labels = scales::percent) +
+  scale_fill_manual(values = body_site_colors) +
+  labs(y = "", x = "Relative abundance") +
+  theme_bw() +
+  theme(
+    strip.background = element_blank(),
+    plot.margin = margin(r = 20),
+    legend.position = "none")
+save_figure("figures/mirix_fig5b_left", width = 5, height = 4.5)
+```
+```{r}
+top_taxa_hmp %>%
+  left_join(suscept_assignments_hmp, by = "assignment") %>%
+  pivot_longer(
+    cols = starts_with("lineage_"), 
+    names_to = "antibiotic", values_to = "susceptibility") %>%
+  mutate(antibiotic = str_to_title(str_remove(antibiotic, "lineage_"))) %>%
+  mutate(antibiotic = factor(antibiotic, levels = antibiotic_levels)) %>%
+  ggplot(aes(y = fct_rev(assignment), x = antibiotic, fill = susceptibility)) +
+  geom_tile(color = "#333333", linewidth = 0.3) +
+  facet_wrap(~ body_site, ncol = 1, scales = "free_y") +
+  scale_fill_manual(values = resistant_colors, na.value = "#FFFFFF") +
+  labs(y = "", x = "") +
+  theme_bw() +
+  theme(
+    panel.border = element_blank(),
+    panel.grid = element_blank(),
+    axis.ticks = element_blank(),
+    axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1),
+    legend.position = "bottom",
+    strip.background = element_blank())
+save_figure("figures/mirix_fig5b_right", width = 3.2, height = 5.9)
+```
