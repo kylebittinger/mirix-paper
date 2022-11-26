@@ -205,6 +205,24 @@ props_hmap_basolo %>%
   pheat_save("figures/hmap_basolo.pdf")
 ```
 
+```{r}
+diffabund_basolo <- cts_basolo %>%
+  group_by(taxon_id) %>%
+  filter(mean(prop) > 0.005) %>%
+  ungroup() %>%
+  left_join(taxa_basolo, by = "taxon_id") %>%
+  left_join(s_basolo, by = "sample_id") %>%
+  mutate(log_prop = log10(prop + 1e-6)) %>%
+  nest_by(assignment) %>%
+  summarise(tidy(lm(log_prop ~ study_group, data = data)), .groups = "drop") %>%
+  filter(term %in% "study_groupVancomycin") %>%
+  mutate(fdr = p.adjust(p.value, method = "fdr")) %>%
+  arrange(p.value) %>%
+  select(assignment, estimate, fdr)
+write_csv(diffabund_basolo, "tables/supplementary_table_1.csv")
+```
+
+
 ## Vancomycin index
 
 ```{r warning=FALSE}
@@ -212,7 +230,7 @@ idxdf_basolo <- cts_basolo %>%
   left_join(taxa_basolo, by = "taxon_id") %>%
   select(-all_of(taxonomic_ranks)) %>%
   group_by(sample_id) %>%
-  summarise(vanco_idx = vancomycin_index(prop, lineage))
+  summarise(vanco_idx = - vancomycin_index(prop, lineage))
 ```
 
 ```{r}
@@ -233,6 +251,13 @@ idxdf_basolo %>%
   left_join(s_basolo, by = "sample_id") %>%
   lm(vanco_idx ~ study_group, data = .) %>%
   summary()
+```
+
+```{r}
+idxdf_basolo %>%
+  left_join(s_basolo, by = "sample_id") %>%
+  group_by(study_group) %>%
+  summarise(mean_idx = mean(vanco_idx))
 ```
 
 ## Susceptibility
@@ -284,7 +309,7 @@ save_figure("figures/mirix_fig4a_left", width = 3.5, height = 2.5)
 s_basolo %>%
   left_join(adiv_basolo, by = "sample_id") %>%
   left_join(idxdf_basolo, by = "sample_id") %>%
-  cor.test(~ vanco_idx + shannon, method = "spearman", data =.)
+  cor.test(~ vanco_idx + shannon, data =.)
 ```
 
 ```{r}
@@ -294,7 +319,7 @@ cts_basolo %>%
   left_join(s_basolo, by = "sample_id") %>%
   left_join(idxdf_basolo, by = "sample_id") %>%
   left_join(adiv_basolo, by = "sample_id") %>%
-  filter(study_group %in% "Vancomycin", vanco_idx < 0) %>%
+  filter(study_group %in% "Vancomycin", vanco_idx > 0) %>%
   group_by(taxon_id) %>%
   filter(mean(prop) > 0.013) %>%
   ungroup() %>%
@@ -559,6 +584,13 @@ s_sprockett <- s_sprockett %>%
   filter(sample_id %in% cts_sprockett$sample_id)
 ```
 
+```{r}
+s_sprockett %>%
+  count(subject_id, study_day) %>%
+  pivot_wider(names_from = study_day, values_from = n)
+```
+
+
 ## Taxa overview
 
 ```{r}
@@ -581,6 +613,32 @@ props_hmap_sprockett %>%
   pheat_save("figures/hmap_sprockett.pdf")
 ```
 
+```{r}
+diffabund_sprockett <- cts_sprockett %>%
+  left_join(taxa_sprockett, by = "taxon_id") %>%
+  group_by(sample_id, assignment) %>%
+  summarise(prop = sum(prop), .groups = "drop") %>%
+  group_by(assignment) %>%
+  filter(mean(prop) > 0.005) %>%
+  ungroup() %>%
+  left_join(s_sprockett, by = "sample_id") %>%
+  mutate(log_prop = log10(prop + 1e-6)) %>%
+  nest_by(assignment) %>%
+  summarise(
+    tidy(lmer(log_prop ~ study_day + (1|subject_id), data = data)),
+    .groups = "drop") %>%
+  filter(effect %in% "fixed", str_starts(term, "study_day")) %>%
+  mutate(term = str_remove(term, "study_day")) %>%
+  mutate(term = factor(term, levels = c("Week 4", "Week 8", "Week 12"))) %>%
+  group_by(term) %>%
+  mutate(fdr = p.adjust(p.value, method = "fdr")) %>%
+  ungroup() %>%
+  arrange(term, p.value) %>%
+  filter(fdr < 0.05) %>%
+  select(assignment, term, estimate, fdr)
+write_csv(diffabund_sprockett, "tables/supplementary_table_2.csv")
+```
+
 ## Metronidazole index
 
 ```{r}
@@ -589,7 +647,7 @@ idxdf_sprockett <- cts_sprockett %>%
   group_by(sample_id, lineage) %>%
   summarise(prop = sum(prop), .groups = "drop") %>%
   group_by(sample_id) %>%
-  summarise(metro_idx = anaerobes_index(prop, lineage))
+  summarise(metro_idx = - anaerobes_index(prop, lineage))
 ```
 
 ```{r}
@@ -667,6 +725,15 @@ s_sprockett %>%
   theme_bw()
 ```
 
+```{r message = FALSE}
+s_sprockett %>%
+  filter(study_day %in% c("Week 0", "Week 12")) %>%
+  adonisplus(
+    bc_sprockett, distmat ~ study_day, sample_id_var = sample_id,
+    shuffle = c(study_day = "within"))
+```
+
+
 ```{r}
 dysbiosis_sprockett <- bc_sprockett %>%
   dist_subset(s_sprockett$sample_id) %>%
@@ -707,7 +774,7 @@ dysbiosis_cor_sprocket <- s_sprockett %>%
   left_join(idxdf_sprockett, by = "sample_id") %>%
   nest_by(study_day) %>%
   summarise(
-    tidy(cor.test(~ dysbiosis + metro_idx, method = "spearman", data = data)),
+    tidy(cor.test(~ dysbiosis + metro_idx, data = data)),
     .groups = "drop") %>%
   mutate(sig = cut(
     p.value, breaks = c(-0.1, 0.001, 0.01, 0.05, 1.1),
@@ -722,9 +789,9 @@ s_sprockett %>%
   ggplot(aes(y = dysbiosis, x = metro_idx)) +
   geom_point(aes(color = study_day)) +
   geom_text(aes(label = str_glue(
-    "rho == {round(estimate, 2)}~\"{sig}\"")),
+    "r = {round(estimate, 2)} {sig}")),
     data = dysbiosis_cor_sprocket,
-    x = 1.7, y = 0.5, parse = TRUE) +
+    x = -1.8, y = 0.5) +
   facet_wrap(~ study_day, nrow = 1) +
   scale_color_manual(values = week_colors, guide = "none") +
   labs(
@@ -919,6 +986,12 @@ adiv_willmann <- cts_willmann %>%
     shannon = vegan::diversity(prop))
 ```
 
+```{r}
+s_willmann %>%
+  count(subject_id)
+```
+
+
 ## Taxa overview
 
 ```{r}
@@ -941,6 +1014,32 @@ props_hmap_willmann %>%
   pheat_save("figures/hmap_willmann.pdf")
 ```
 
+```{r}
+diffabund_willmann <- cts_willmann %>%
+  left_join(taxa_willmann, by = "taxon_id") %>%
+  group_by(sample_id, assignment) %>%
+  summarise(prop = sum(prop), .groups = "drop") %>%
+  group_by(assignment) %>%
+  filter(mean(prop) > 0.005) %>%
+  ungroup() %>%
+  left_join(s_willmann, by = "sample_id") %>%
+  mutate(log_prop = log10(prop + 1e-6)) %>%
+  nest_by(assignment) %>%
+  summarise(
+    tidy(lmer(log_prop ~ study_day + (1|subject_id), data = data)),
+    .groups = "drop") %>%
+  filter(effect %in% "fixed", str_starts(term, "study_day")) %>%
+  mutate(term = str_remove(term, "study_day")) %>%
+  group_by(term) %>%
+  mutate(fdr = p.adjust(p.value, method = "fdr")) %>%
+  ungroup() %>%
+  arrange(term, p.value) %>%
+  filter(fdr < 0.05) %>%
+  select(assignment, term, estimate, fdr)
+write_csv(diffabund_willmann, "tables/supplementary_table_3.csv")
+```
+
+
 ## Ciprofloxacin index
 
 ```{r warning=FALSE}
@@ -949,7 +1048,7 @@ idxdf_willmann <- cts_willmann %>%
   group_by(sample_id, lineage) %>%
   summarise(prop = sum(prop), .groups = "drop") %>%
   group_by(sample_id) %>%
-  summarise(cipro_idx = aerobes_index(prop, lineage))
+  summarise(cipro_idx = - aerobes_index(prop, lineage))
 ```
 
 ```{r}
@@ -1140,7 +1239,9 @@ s_cabral <- read_csv("paperdata/cabral/SraRunInfo.csv") %>%
     study_group %in% "Amoxicillin" ~ "T12",
     study_group %in% "Ciprofloxacin" ~ "T24",
     TRUE ~ study_day)) %>%
-  filter(study_group %in% c("Control", "Amoxicillin"), study_day %in% "T12")
+  filter(study_group %in% c("Control", "Amoxicillin"), study_day %in% "T12") %>%
+  mutate(study_group = fct_drop(study_group)) %>%
+  mutate(study_group = fct_relevel(study_group, "Control"))
 ```
 
 ```{r message=FALSE}
@@ -1176,6 +1277,11 @@ adiv_cabral <- cts_cabral %>%
     shannon = vegan::diversity(prop))
 ```
 
+```{r}
+s_cabral %>%
+  count(study_group)
+```
+
 ## Taxa overview
 
 ```{r}
@@ -1198,6 +1304,24 @@ props_hmap_cabral %>%
   pheat_save("figures/hmap_cabral.pdf")
 ```
 
+```{r}
+diffabund_cabral <- cts_cabral %>%
+  group_by(taxon_id) %>%
+  filter(mean(prop) > 0.005) %>%
+  ungroup() %>%
+  left_join(taxa_cabral, by = "taxon_id") %>%
+  left_join(s_cabral, by = "sample_id") %>%
+  mutate(log_prop = log10(prop + 1e-6)) %>%
+  nest_by(assignment) %>%
+  summarise(tidy(lm(log_prop ~ study_group, data = data)), .groups = "drop") %>%
+  filter(str_starts(term, "study_group")) %>%
+  mutate(term = str_remove(term, "study_group")) %>%
+  mutate(fdr = p.adjust(p.value, method = "fdr")) %>%
+  arrange(p.value) %>%
+  select(assignment, term, estimate, fdr)
+write_csv(diffabund_cabral, "tables/supplementary_table_4.csv")
+```
+
 ## Amoxicillin index
 
 ```{r}
@@ -1206,7 +1330,7 @@ idxdf_cabral <- cts_cabral %>%
   group_by(sample_id, lineage) %>%
   summarise(prop = sum(prop), .groups = "drop") %>%
   group_by(sample_id) %>%
-  summarise(amox_idx = penicillin_index(prop, lineage))
+  summarise(amox_idx = - penicillin_index(prop, lineage))
 ```
 
 ```{r}
@@ -1430,7 +1554,7 @@ rebalance_at_cabral <- function (x) {
 ```{r}
 pred_cabral <- tibble(amox_idx = seq(-1.5, 1.8, 0.1)) %>%
   rowwise() %>%
-  mutate(predicted_data = list(rebalance_at_cabral(amox_idx))) %>%
+  mutate(predicted_data = list(rebalance_at_cabral(- amox_idx))) %>%
   unnest(predicted_data)
 ```
 
@@ -1519,6 +1643,19 @@ adiv_boynton <- cts_boynton %>%
     shannon = vegan::diversity(prop))
 ```
 
+```{r}
+s_boynton %>%
+  count(subject_id, study_group)
+```
+
+## Susceptibility
+
+```{r warning=FALSE}
+suscept_boynton <- taxa_boynton %>%
+  mutate(doxy_suscept = tetracycline_susceptibility(lineage)) %>%
+  select(taxon_id, doxy_suscept)
+```
+
 ## Taxa overview
 
 ```{r}
@@ -1537,8 +1674,37 @@ props_hmap_boynton <- cts_boynton %>%
 ```{r}
 props_hmap_boynton %>%
   pheat() %>%
-  pheat_display_cols(gaps = factor_gaps(paste(s_boynton$study_day, s_boynton$study_group))) %>%
+  pheat_display_cols(
+    gaps = factor_gaps(paste(s_boynton$study_day, s_boynton$study_group))) %>%
   pheat_save("figures/hmap_boynton.pdf")
+```
+
+```{r}
+diffabund_boynton <- cts_boynton %>%
+  left_join(taxa_boynton, by = "taxon_id") %>%
+  left_join(suscept_boynton, by = "taxon_id") %>%
+  group_by(sample_id, assignment, doxy_suscept) %>%
+  summarise(prop = sum(prop), .groups = "drop") %>%
+  group_by(assignment) %>%
+  filter(mean(prop) > 0.005) %>%
+  ungroup() %>%
+  left_join(s_boynton, by = "sample_id") %>%
+  mutate(log_prop = log10(prop + 1e-6)) %>%
+  nest_by(assignment, doxy_suscept) %>%
+  summarise(
+    tidy(lmer(log_prop ~ study_group * study_day + (1|subject_id), data = data)),
+    .groups = "drop") %>%
+  filter(effect %in% "fixed", str_starts(term, "study_group")) %>%
+  mutate(term = str_remove(term, "study_day")) %>%
+  mutate(term = str_remove(term, "study_group")) %>%
+  mutate(term = factor(term, levels = paste("Doxycycline:Day", c(7, 14, 21, 28)))) %>%
+  group_by(term) %>%
+  mutate(fdr = p.adjust(p.value, method = "fdr")) %>%
+  ungroup() %>%
+  arrange(term, p.value) %>%
+  filter(fdr < 0.05) %>%
+  select(assignment, doxy_suscept, term, estimate, fdr)
+write_csv(diffabund_boynton, "tables/supplementary_table_5.csv")
 ```
 
 ## Doxycycline index
@@ -1549,7 +1715,7 @@ idxdf_boynton <- cts_boynton %>%
   group_by(sample_id, lineage) %>%
   summarise(prop = sum(prop), .groups = "drop") %>%
   group_by(sample_id) %>%
-  summarise(doxy_idx = tetracycline_index(prop, lineage))
+  summarise(doxy_idx = - tetracycline_index(prop, lineage))
 ```
 
 ```{r}
@@ -1570,8 +1736,10 @@ save_figure("figures/mirix_fig3b_left", width = 4, height = 5)
 ```{r}
 idxdf_boynton %>%
   left_join(s_boynton, by = "sample_id") %>%
-  lm(doxy_idx ~ study_group * study_day, data = .) %>%
-  summary()
+  nest_by(study_group) %>%
+  summarise(
+    tidy(lmer(doxy_idx ~ study_day + (1|subject_id), data = data)),
+    .groups = "drop")
 ```
 
 ## Diversity
@@ -1590,8 +1758,10 @@ s_boynton %>%
 ```{r}
 s_boynton %>%
   left_join(adiv_boynton, by = "sample_id") %>%
-  lmer(shannon ~ study_group * study_day + (1|subject_id), data = .) %>%
-  summary()
+  nest_by(study_group) %>%
+  summarise(
+    tidy(lmer(shannon ~ study_day + (1|subject_id), data = data)),
+    .groups = "drop")
 ```
 
 ```{r}
@@ -1658,8 +1828,10 @@ dysbiosis_boynton %>%
 ```{r}
 dysbiosis_boynton %>%
   left_join(s_boynton, by = "sample_id") %>%
-  lmer(dysbiosis ~ study_group * study_day + (1|subject_id), data = .) %>%
-  summary()
+  nest_by(study_group) %>%
+  summarise(
+    tidy(lmer(dysbiosis ~ study_day + (1|subject_id), data = data)),
+    .groups = "drop")
 ```
 
 ```{r}
@@ -1672,7 +1844,7 @@ s_boynton %>%
   scale_color_manual(values = day_colors_long) +
   labs(
     y = "Dysbiosis\n(distance to Day 0 centroid)",
-    x = "MiRIx - Metronidazole",
+    x = "MiRIx - Doxycycline",
     color = "") +
   theme_bw() +
   theme(strip.background = element_blank())
@@ -1964,11 +2136,12 @@ save_figure("figures/mirix_fig4e", height = 2.4, width = 5.5)
 ## Overview
 
 ```{r}
-set.seed(3)
+set.seed(10)
 diagram_samples <- tibble(
-  sample_id = paste("Sample", LETTERS[1:4]),
-  resistant_prop = c(0.2, 0.4, 0.52, 0.9)) %>%
-  mutate(mirix_val = log10(resistant_prop / (1 - resistant_prop)))
+  sample_id = paste("Sample", LETTERS[1:3]),
+  susceptible_prop = c(0.8, 0.52, 0.1)) %>%
+  mutate(resistant_prop = 1 - susceptible_prop) %>%
+  mutate(mirix_val = log10(susceptible_prop / resistant_prop))
 diagram_taxa <- tibble(
   taxon_id = paste("Taxon", LETTERS[1:10]),
   susceptibility = rep(c("resistant", "susceptible"), c(5, 5)))
@@ -1978,10 +2151,9 @@ diagram_samples %>%
   group_by(sample_id) %>%
   mutate(prop = rchisq(10, 5)) %>%
   mutate(prop = prop / sum(prop)) %>%
-  mutate(prop = predict_abundance(mirix_val[1], prop, susceptibility)) %>%
+  mutate(prop = predict_abundance(-mirix_val[1], prop, susceptibility)) %>%
   ungroup() %>%
   mutate(sample_id = fct_rev(sample_id)) %>%
-  mutate(susceptibility = fct_rev(susceptibility)) %>%
   ggplot(aes(x = prop, y = sample_id, fill = susceptibility)) +
   geom_col(color = "black") +
   scale_fill_manual(values = resistant_colors) +
