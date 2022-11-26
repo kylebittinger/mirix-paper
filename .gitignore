@@ -6,4 +6,6 @@
 figures/*.pdf
 figures/*.png
 
+tables/*.csv
+
 .DS_Store
