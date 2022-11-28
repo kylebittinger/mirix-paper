@@ -85,6 +85,15 @@ save_figure <- function (fbase, width, height, p = last_plot()) {
 }
 ```
 
+```{r}
+p_stars <- function (x, ns = "") {
+  cut(
+    x, breaks = c(-0.001, 0.001, 0.01, 0.05, 1.01),
+    labels = c("***", "**", "*", ns))
+}
+```
+
+
 ## Colors
 
 ```{r}
@@ -241,9 +250,9 @@ idxdf_basolo %>%
   geom_boxplot(outlier.shape = NA) +
   geom_quasirandom(groupOnX = FALSE) +
   scale_color_manual(values = group_colors_placebo, guide = "none") +
-  labs(x = "MiRIx - Vancomycin", y = "") +
+  labs(x = "Vancomycin-MiRIx", y = "") +
   theme_classic()
-save_figure("figures/mirix_fig2a_left", width = 4, height = 2)
+save_figure("figures/mirix_fig2a_left", width = 3.8, height = 1.5)
 ```
 
 ```{r}
@@ -300,7 +309,7 @@ s_basolo %>%
   scale_color_manual(values = group_colors_placebo, guide = "none") +
   labs(
     y = "Shannon diversity",
-    x = "MiRIx - Vancomycin") +
+    x = "Vancomycin-MiRIx") +
   theme_bw()
 save_figure("figures/mirix_fig4a_left", width = 3.5, height = 2.5)
 ```
@@ -658,9 +667,10 @@ idxdf_sprockett %>%
   geom_boxplot(outlier.shape = NA) +
   geom_quasirandom(groupOnX = FALSE) +
   scale_color_manual(values = week_colors, guide = "none") +
-  labs(x = "MiRIx - Metronidazole", y = "") +
-  theme_classic()
-save_figure("figures/mirix_fig2b_left", width = 4, height = 3)
+  labs(x = "Metronidazole-MiRIx", y = "") +
+  theme_classic() +
+  theme(plot.margin = margin(l=20, t=5, r=5, b=5))
+save_figure("figures/mirix_fig2b_left", width = 3.8, height = 2.5)
 ```
 
 ```{r}
@@ -987,10 +997,38 @@ adiv_willmann <- cts_willmann %>%
 ```
 
 ```{r}
+card_willmann <- read_tsv(
+  "paperdata/willmann/card_assignments.tsv", show_col_types = FALSE) %>%
+  rename(
+    accession = geneID, strain = taxon, reads = count, sample_id = SampleID) %>%
+  pivot_wider(
+    names_from = sample_id, values_from = reads,
+    values_fill = list(reads = 0)) %>%
+  pivot_longer(
+    cols = -c(accession, strain), names_to = "sample_id", values_to = "reads")
+```
+
+```{r}
+card_info <- read_tsv(
+  "paperdata/willmann/aro_categories_index.tsv", show_col_types = FALSE) %>%
+  rename(
+    accession = `Protein Accession`, dna_accession = `DNA Accession`,
+    gene_family = `AMR Gene Family`, drug_class = `Drug Class`,
+    resistance_mechanism = `Resistance Mechanism`)
+```
+
+```{r}
+# grep '^>' paperdata/willmann/protein_fasta_protein_homolog_model.fasta|perl -lpe's/^>gb\|//; s/\|/\t/g; s/ \[/\t/; s/\]\s+$//' > paperdata/willmann/card_header_info.tsv
+card_header_info <- read_tsv(
+  "paperdata/willmann/card_header_info.tsv",
+  col_names = c("accession", "aro", "gene_name", "species"),
+  show_col_types = FALSE)
+```
+
+```{r}
 s_willmann %>%
   count(subject_id)
 ```
-
 
 ## Taxa overview
 
@@ -1059,9 +1097,10 @@ idxdf_willmann %>%
   geom_boxplot(outlier.shape = NA) +
   geom_quasirandom(groupOnX = FALSE) +
   scale_color_manual(values = day_colors, guide = "none") +
-  labs(x = "MiRIx - Ciprofloxacin", y = "") +
-  theme_classic()
-save_figure("figures/mirix_fig2c_left", width = 4, height = 3)
+  labs(x = "Ciprofloxacin-MiRIx", y = "") +
+  theme_classic() +
+  theme(plot.margin = margin(l=34, t=5, r=5, b=5))
+save_figure("figures/mirix_fig2c_left", width = 3.8, height = 2.5)
 ```
 
 ```{r}
@@ -1217,6 +1256,72 @@ s_willmann %>%
   theme_bw()
 ```
 
+## CARD genes
+
+```{r}
+card_props_willmann <- adiv_willmann %>%
+  left_join(card_willmann, by = "sample_id") %>%
+  mutate(prop = reads / total_reads) %>%
+  left_join(card_info, by = "accession") %>%
+  filter(str_detect(drug_class, "fluoroquinolone")) %>%
+  left_join(card_header_info, by = "accession") %>%
+  filter(!is.na(aro)) %>%
+  left_join(s_willmann, by = "sample_id") %>%
+  group_by(accession) %>%
+  filter(mean(prop) > 1e-5) %>%
+  ungroup() %>%
+  mutate(species = str_remove(species, "(?<=K-12).+")) %>%
+  mutate(species = str_remove(species, "(?<=enterica) subsp.+")) %>%
+  mutate(species = str_remove(species, "(?<=doylei).+")) %>%
+  mutate(species = str_remove(species, "subsp. aureus ")) %>%
+  mutate(species = str_remove(species, "(?<=damselae).+"))
+```
+
+```{r}
+card_props_willmann %>%
+  group_by(accession) %>%
+  summarise(mean_prop = mean(prop), .groups = "drop") %>%
+  arrange(desc(mean_prop))
+```
+
+```{r}
+card_tests_willman <- card_props_willmann %>%
+  mutate(log_prop = log10(prop + 1e-6)) %>%
+  group_by(aro, gene_name, resistance_mechanism, species) %>%
+  summarize(
+    tidy(lmer(log_prop ~ study_day + (1|subject_id))),
+    .groups = "drop") %>%
+  filter(str_detect(term, "study_day")) %>%
+  mutate(term = str_remove(term, "study_day")) %>%
+  group_by(term) %>%
+  mutate(fdr = p.adjust(p.value)) %>%
+  ungroup() %>%
+  rename(study_day = term) %>%
+  mutate(sig_label = p_stars(fdr))
+card_tests_willman %>%
+  filter(fdr < 0.05) %>%
+  select(aro, study_day, estimate, fdr)
+```
+
+```{r}
+card_props_willmann %>%
+  ggplot() +
+  ggbeeswarm::geom_quasirandom(
+    aes(x = study_day, color = study_day, y = prop)) +
+  geom_text(
+    aes(label = sig_label, x = study_day, y = 0.001), 
+    data = dplyr::filter(card_tests_willman, fdr < 0.05)) +
+  facet_wrap(~ resistance_mechanism + aro + gene_name + species) +
+  scale_y_log10() +
+  scale_color_manual(values = day_colors) +
+  labs(y = "Relative abundance", x = "") +
+  theme_bw() +
+  theme(
+    strip.background = element_blank(),
+    legend.position = "none")
+save_figure("figures/mirix_figS1", width = 20, height = 20)
+```
+
 # Cabral (amoxicillin, shotgun)
 
 ## Import
@@ -1318,7 +1423,7 @@ diffabund_cabral <- cts_cabral %>%
   mutate(term = str_remove(term, "study_group")) %>%
   mutate(fdr = p.adjust(p.value, method = "fdr")) %>%
   arrange(p.value) %>%
-  select(assignment, term, estimate, fdr)
+  select(assignment, estimate, fdr)
 write_csv(diffabund_cabral, "tables/supplementary_table_4.csv")
 ```
 
@@ -1336,14 +1441,15 @@ idxdf_cabral <- cts_cabral %>%
 ```{r}
 idxdf_cabral %>%
   left_join(s_cabral, by = "sample_id") %>%
-  mutate(study_day = fct_rev(study_day)) %>%
+  mutate(study_group = fct_rev(study_group)) %>%
   ggplot(aes(x = amox_idx, y = study_group, color = study_group)) +
   geom_boxplot(outlier.shape = NA) +
   geom_quasirandom(groupOnX = FALSE) +
   scale_color_manual(values = group_colors_control, guide = "none") +
-  labs(x = "MiRIx - Amoxicillin", y = "") +
-  theme_classic()
-save_figure("figures/mirix_fig3a_left", width = 4, height = 2)
+  labs(x = "Amoxicillin-MiRIx", y = "") +
+  theme_classic() +
+  theme(plot.margin = margin(l=14, t=5, r=5, b=5))
+save_figure("figures/mirix_fig3a_left", width = 3.8, height = 1.5)
 ```
 
 ```{r}
@@ -1727,10 +1833,12 @@ idxdf_boynton %>%
   geom_quasirandom(groupOnX = FALSE) +
   facet_wrap(~ study_group, ncol = 1) +
   scale_color_manual(values = day_colors_long, guide = "none") +
-  labs(x = "MiRIx - Doxycycline", y = "") +
+  labs(x = "Doxycycline-MiRIx", y = "") +
   theme_classic() +
-  theme(strip.background = element_blank())
-save_figure("figures/mirix_fig3b_left", width = 4, height = 5)
+  theme(
+    strip.background = element_blank(),
+    plot.margin = margin(l=30, t=5, r=5, b=5))
+save_figure("figures/mirix_fig3b_left", width = 3.8, height = 5)
 ```
 
 ```{r}
@@ -1978,7 +2086,7 @@ cts_basolo %>%
     axis.line.y = element_blank(),
     axis.ticks.y = element_blank(),
     plot.margin = margin(l = 10, r = 20, b = 6, t = 4))
-save_figure("figures/mirix_fig2a_right", width = 4, height = 2)
+save_figure("figures/mirix_fig2a_right", width = 3.8, height = 1.5)
 ```
 
 ```{r}
@@ -2004,7 +2112,7 @@ cts_sprockett %>%
     axis.line.y = element_blank(),
     axis.ticks.y = element_blank(),
     plot.margin = margin(l = 10, r = 20, b = 6, t = 4))
-save_figure("figures/mirix_fig2b_right", width = 4, height = 3)
+save_figure("figures/mirix_fig2b_right", width = 3.8, height = 2.5)
 ```
 
 ```{r}
@@ -2030,7 +2138,7 @@ cts_willmann %>%
     axis.line.y = element_blank(),
     axis.ticks.y = element_blank(),
     plot.margin = margin(l = 10, r = 20, b = 6, t = 4))
-save_figure("figures/mirix_fig2c_right", width = 4, height = 3)
+save_figure("figures/mirix_fig2c_right", width = 3.8, height = 2.5)
 ```
 
 ```{r}
@@ -2043,6 +2151,7 @@ cts_cabral %>%
   group_by(study_group, assignment) %>%
   summarise(prop = mean(prop), .groups = "drop") %>%
   mutate(assignment = factor(assignment, levels = barplot_taxa)) %>%
+  mutate(study_group = fct_rev(study_group)) %>%
   ggplot(aes(x = prop, y = study_group, fill = assignment)) +
   geom_col(position = position_stack(reverse = TRUE)) +
   scale_fill_manual(values = taxa_colors, guide = "none") +
@@ -2055,7 +2164,7 @@ cts_cabral %>%
     axis.line.y = element_blank(),
     axis.ticks.y = element_blank(),
     plot.margin = margin(l = 10, r = 20, b = 6, t = 4))
-save_figure("figures/mirix_fig3a_right", width = 4, height = 2)
+save_figure("figures/mirix_fig3a_right", width = 3.8, height = 1.5)
 ```
 
 ```{r}
@@ -2083,7 +2192,7 @@ cts_boynton %>%
     axis.ticks.y = element_blank(),
     plot.margin = margin(l = 10, r = 20, b = 6, t = 4),
     strip.background = element_blank())
-save_figure("figures/mirix_fig3b_right", width = 4, height = 5)
+save_figure("figures/mirix_fig3b_right", width = 3.8, height = 5)
 ```
 
 ```{r}
