@@ -806,7 +806,7 @@ s_sprockett %>%
   scale_color_manual(values = week_colors, guide = "none") +
   labs(
     y = "Dysbiosis\n(distance to Week 0 centroid)",
-    x = "MiRIx - Metronidazole") +
+    x = "Metronidazole-MiRIx") +
   theme_bw() +
   theme(strip.background = element_blank())
 save_figure("figures/mirix_fig4b", height = 2.4, width = 9)
@@ -1880,7 +1880,7 @@ s_boynton %>%
   geom_point() +
   scale_color_manual(values = day_colors_long) +
   facet_grid(~ study_group) +
-  labs(y = "Shannon diversity", x = "MiRIx - Doxycycline", color = "") +
+  labs(y = "Shannon diversity", x = "Doxycycline-MiRIx", color = "") +
   theme_bw() +
   theme(strip.background = element_blank())
 save_figure("figures/mirix_fig4c", height = 2.4, width = 5)
@@ -1952,7 +1952,7 @@ s_boynton %>%
   scale_color_manual(values = day_colors_long) +
   labs(
     y = "Dysbiosis\n(distance to Day 0 centroid)",
-    x = "MiRIx - Doxycycline",
+    x = "Doxycycline-MiRIx",
     color = "") +
   theme_bw() +
   theme(strip.background = element_blank())
